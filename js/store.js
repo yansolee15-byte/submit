@@ -1,5 +1,6 @@
 import { NONE, PROGRESS, DONE, submissionId, orderedStudents, isExcluded } from './model.js?v08';
 import { firebaseConfig, teacherUid } from './config.js';
+import { classroomAccountName } from './classroom-access.js?v12';
 import { checkFirebaseConfiguration } from './config-check.js';
 
 const demoStudents = [
@@ -114,7 +115,8 @@ async function createFirebaseStore(onChange, onError) {
   const db = dbSdk.getFirestore(app);
   let teacher = false;
   let switchingAuth = false;
-  let guestPending = null;
+  const classroomEmail = `${classroomAccountName}@${firebaseConfig.projectId}.firebaseapp.com`;
+  let dataReady = false;
   let watcher = null;
   const collections = ['students', 'items', 'submissions'];
   const labels = { students: '학생 명단', items: '제출 항목', submissions: '제출 기록' };
@@ -124,6 +126,7 @@ async function createFirebaseStore(onChange, onError) {
   function stopWatching() {
     const previous = watcher;
     watcher = null;
+    dataReady = false;
     previous?.stop();
   }
 
@@ -152,13 +155,13 @@ async function createFirebaseStore(onChange, onError) {
 
     function fail(error) {
       if (!isCurrent()) return;
-      if (initial) {
+      const wasInitial = initial;
+      if (wasInitial) {
         initial = false;
         rejectReady(error);
-      } else {
-        onError(error);
       }
-      stopWatching();
+      clearView(auth.currentUser);
+      if (!wasInitial) onError(error);
     }
 
     for (const name of collections) {
@@ -173,7 +176,8 @@ async function createFirebaseStore(onChange, onError) {
           clearTimeout(timer);
           resolveReady(true);
         }
-        onChange({data: clone(data), teacher});
+        dataReady = true;
+        onChange({data: clone(data), teacher, unlocked: true});
       }, error => {
         const message = error.code === 'permission-denied'
           ? `${labels[name]}에 접근할 권한이 없습니다.`
@@ -189,31 +193,49 @@ async function createFirebaseStore(onChange, onError) {
     return Boolean(teacherUid) && user?.uid === teacherUid && !user.isAnonymous;
   }
 
-  async function signInGuest() {
-    if (auth.currentUser?.isAnonymous) return auth.currentUser;
-    if (!guestPending) {
-      guestPending = authSdk.signInAnonymously(auth).then(({user}) => user)
-        .finally(() => { guestPending = null; });
-    }
-    return guestPending;
+  function isClassroom(user) {
+    return Boolean(user && !user.isAnonymous && user.email?.toLowerCase() === classroomEmail.toLowerCase());
   }
 
-  // 이전 계정으로 열린 구독은 새 인증 상태가 적용되기 전에 먼저 닫습니다.
+  function clearView(user) {
+    stopWatching();
+    teacher = isTeacher(user);
+    data = emptyData();
+    onChange({data: clone(data), teacher, unlocked: false});
+  }
+
+  // 인증 계정이 바뀌기 전에 이전 계정의 데이터 구독과 표시를 지웁니다.
   authSdk.beforeAuthStateChanged(auth, nextUser => {
-    if (auth.currentUser?.uid !== nextUser?.uid) stopWatching();
+    if (auth.currentUser?.uid !== nextUser?.uid) clearView(nextUser);
+  }, () => {
+    if (!switchingAuth) followAuth(auth.currentUser);
   });
 
   function followAuth(user) {
     if (switchingAuth || auth.currentUser?.uid !== user?.uid) return;
-    teacher = isTeacher(user);
-    if (!user) {
-      stopWatching();
-      data = emptyData();
-      onChange({data: clone(data), teacher: false});
-      signInGuest().catch(onError);
-      return;
+    if (!isTeacher(user) && !isClassroom(user)) { clearView(user); return; }
+    if (watcher?.uid !== user.uid) clearView(user);
+    watch(user).catch(error => {
+      // 같은 계정으로 여전히 접속 중일 때만 현재 화면에 오류를 표시합니다.
+      if (auth.currentUser?.uid === user.uid && !switchingAuth) onError(error);
+    });
+  }
+
+  async function login(email, password, accept, denied, remember = false) {
+    switchingAuth = true;
+    try {
+      if (remember) await authSdk.setPersistence(auth, authSdk.browserLocalPersistence);
+      const {user} = await authSdk.signInWithEmailAndPassword(auth, email, password);
+      if (!accept(user)) {
+        await authSdk.signOut(auth);
+        throw new Error(denied);
+      }
+      teacher = isTeacher(user);
+      if (!await watch(user)) throw new Error('로그인 상태가 변경되었습니다. 다시 시도해 주세요.');
+    } finally {
+      switchingAuth = false;
+      if (!watcher && !dataReady) clearView(auth.currentUser);
     }
-    watch(user).catch(onError);
   }
 
   const ref = (name, docId) => dbSdk.doc(db, name, docId);
@@ -230,42 +252,34 @@ async function createFirebaseStore(onChange, onError) {
       authSdk.onAuthStateChanged(auth, followAuth, onError);
     },
     async loginTeacher(email, password) {
-      if (!teacherUid) throw new Error('js/config.js에 교사 UID를 먼저 입력해 주세요.');
-      switchingAuth = true;
+      await login(email, password, isTeacher, '등록된 교사 계정이 아닙니다.');
+    },
+    async loginClassroom(password) {
       try {
-        if (guestPending) await guestPending.catch(() => {});
-        const {user} = await authSdk.signInWithEmailAndPassword(auth, email, password);
-        if (!isTeacher(user)) {
-          await authSdk.signOut(auth);
-          throw new Error('등록된 교사 계정이 아닙니다.');
+        await login(classroomEmail, password, isClassroom, '학급 계정 설정을 확인해 주세요.', true);
+      } catch (error) {
+        if (['auth/invalid-credential', 'auth/invalid-login-credentials', 'auth/wrong-password', 'auth/user-not-found'].includes(error?.code)) {
+          throw new Error('학급 비밀번호를 확인해 주세요.');
         }
-        teacher = true;
-        if (!await watch(user)) throw new Error('로그인 상태가 변경되었습니다. 다시 로그인해 주세요.');
-      } finally {
-        switchingAuth = false;
-        if (!watcher && !teacher) followAuth(auth.currentUser);
+        throw error;
       }
     },
     async logoutTeacher() {
       switchingAuth = true;
-      stopWatching();
+      clearView(null);
       try {
         await authSdk.signOut(auth);
-        teacher = false;
-        data = emptyData();
-        onChange({data: clone(data), teacher: false});
-        const user = await signInGuest();
-        if (!await watch(user)) throw new Error('학생 화면을 불러오지 못했습니다. 다시 시도해 주세요.');
       } finally {
         switchingAuth = false;
-        teacher = isTeacher(auth.currentUser);
-        // 로그아웃 자체가 실패한 경우에만 기존 교사 화면의 구독을 복구합니다.
-        if (teacher && !watcher) followAuth(auth.currentUser);
+        followAuth(auth.currentUser);
       }
     },
     async saveSubmissions(itemId, changes, expected = null) {
       const entries = Object.entries(changes);
       if (entries.length === 0) return;
+      if (!dataReady || (!isTeacher(auth.currentUser) && !isClassroom(auth.currentUser))) {
+        throw new Error('제출 현황판에 다시 입장해 주세요.');
+      }
       checkEligible(data, itemId, entries);
       if (entries.length > 400) throw new Error('한 번에 수정할 수 있는 기록은 400개까지입니다.');
       // 학생 팝업은 스냅샷을 받은 뒤 같은 학생의 기록이 외부에서 바뀌었는지도 검사한다.

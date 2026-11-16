@@ -1,10 +1,10 @@
-import { createStore } from './store.js?v08';
+import { createStore } from './store.js?v12';
 import { NONE, PROGRESS, DONE, EXCLUDED, nextStatus, statusLabel, statusIcon,
   getStatus, stats, escapeHTML as h, orderedStudents, orderedItems, isExcluded, displayStatus } from './model.js?v08';
 
 const $app = document.getElementById('app');
 let store;
-let state = {data: {students:[], items:[], submissions:[]}, teacher:false};
+let state = {data: {students:[], items:[], submissions:[]}, teacher:false, unlocked:false};
 const adminEntry = new URLSearchParams(window.location.search).has('admin');
 let view = adminEntry ? 'login' : 'student';
 let teacherTab = 'overview';
@@ -112,6 +112,15 @@ function renderModal() {
       <button class="btn primary" data-action="save-modal" ${busy ? 'disabled' : ''}>${busy ? '저장 중…' : '저장'}</button></div>
   </section></div>`;
 }
+function renderClassroomLogin() {
+  return `<main class="container"><div class="panel" style="max-width:450px;margin:30px auto">
+    <h1>우리 반 제출 현황판</h1><p class="muted">학급 비밀번호를 입력해 주세요.</p>
+    <form data-form="classroom-login" class="field" style="gap:14px;margin-top:20px">
+      <div class="field"><label for="classroom-password">학급 비밀번호</label>
+        <input type="password" id="classroom-password" name="password" required autocomplete="current-password" /></div>
+      <button type="submit" class="btn primary" ${busy ? 'disabled' : ''}>${busy ? '입장 중…' : '입장하기'}</button>
+    </form></div></main>`;
+}
 function renderLogin() {
   return `<main class="container">${demoBanner()}
     <div class="panel" style="max-width:450px;margin:30px auto"><h1>선생님 로그인</h1>
@@ -218,7 +227,10 @@ function renderStudents() {
 }
 function render() {
   if (returningToStudent) { $app.innerHTML = header() + loadingScreen; return; }
-  $app.innerHTML = header() + (view === 'teacher' && state.teacher ? renderTeacher() : view === 'login' ? renderLogin() : renderStudent()) + renderModal();
+  const content = view === 'login' ? renderLogin()
+    : !state.unlocked ? renderClassroomLogin()
+    : view === 'teacher' && state.teacher ? renderTeacher() : renderStudent();
+  $app.innerHTML = header() + content + (state.unlocked ? renderModal() : '');
 }
 async function withBusy(operation, successMessage) {
   if (busy) return;
@@ -277,7 +289,7 @@ async function handleClick(event) {
       }
     }, '학생 화면으로 이동했습니다.');
   }
-  if (action === 'open-modal') openModal(targetId);
+  if (action === 'open-modal' && state.unlocked) openModal(targetId);
   if (action === 'close-modal') { modal = null; render(); }
   if (action === 'toggle-student' && modal) {
     const item = itemById(modal.itemId);
@@ -332,6 +344,9 @@ async function handleSubmit(event) {
   if (!form) return;
   event.preventDefault();
   const values = new FormData(form);
+  if (form.dataset.form === 'classroom-login') {
+    await withBusy(() => store.loginClassroom(values.get('password')));
+  }
   if (form.dataset.form === 'login') {
     await withBusy(async () => {await store.loginTeacher(values.get('email'), values.get('password')); view = 'teacher';}, '교사 계정으로 로그인했습니다.');
   }
@@ -397,15 +412,17 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && modal && !busy) { modal = null; render(); }
 });
 try {
-  store = await createStore(({data,teacher}) => {
-    const itemForm = view === 'teacher' && teacher && teacherTab === 'items' && !busy
+  store = await createStore(({data,teacher,unlocked = true}) => {
+    if (!unlocked) modal = null;
+    if (unlocked && teacher && adminEntry && view === 'login') view = 'teacher';
+    const itemForm = view === 'teacher' && teacher && unlocked && teacherTab === 'items' && !busy
       ? $app.querySelector('[data-form="item"]') : null;
     if (itemForm) {
       const currentDraft = new FormData(itemForm);
       const wasFocused = document.activeElement;
       const focusedName = itemForm.contains(wasFocused) ? wasFocused.name : null;
       const focusedValue = itemForm.contains(wasFocused) ? wasFocused.value : null;
-      state = {data,teacher};
+      state = {data,teacher,unlocked};
       render();
       const nextForm = $app.querySelector('[data-form="item"]');
       if (!nextForm) return;
@@ -422,8 +439,8 @@ try {
       }
       return;
     }
-    state = {data,teacher};
-    if (!teacher && view==='teacher') view='student';
+    state = {data,teacher,unlocked};
+    if (view === 'teacher' && (!teacher || !unlocked)) view = teacher ? 'login' : 'student';
     render();
   }, showError);
   await store.start();
