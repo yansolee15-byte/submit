@@ -49,6 +49,12 @@ function students() { return orderedStudents(state.data.students); }
 function itemById(itemId) { return state.data.items.find(i => i.id === itemId); }
 function choiceClass(status) { return ` ${[DONE, PROGRESS, EXCLUDED].includes(status) ? status : NONE}`; }
 function itemCounts(itemId) { return stats(state.data, itemId); }
+function formatDueDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) return value;
+  return `${value} (${['일', '월', '화', '수', '목', '금', '토'][date.getUTCDay()]})`;
+}
 function eligibleStudents(item) { return students().filter(s => !isExcluded(item, s.id)); }
 function overviewItem(items = activeItems()) { return items.find(item => item.id === activeItemId) ?? items[0]; }
 function numberGrid(item) {
@@ -79,7 +85,7 @@ function renderStudent() {
     <div class="cards">${items.map(item => {
       const counts = itemCounts(item.id);
       return `<button class="card click-card" data-action="open-modal" data-id="${h(item.id)}" aria-label="${h(item.title)} 제출 상태 체크하기">
-        <div class="card-head"><div><div class="item-name">${h(item.title)}</div><div class="item-meta">${item.dueDate ? `제출 기한: ${h(item.dueDate)}` : '제출 기한 없음'}</div></div>
+        <div class="card-head"><div><div class="item-name">${h(item.title)}</div><div class="item-meta">${item.dueDate ? `제출 기한: ${h(formatDueDate(item.dueDate))}` : '제출 기한 없음'}</div></div>
         ${item.allowProgress ? '<span class="pill">진행 중 사용</span>' : ''}</div>
         ${numberGrid(item)}
         <div class="card-foot"><span class="summary">${counts.eligible ? `완료 ${counts.done}/${counts.eligible}명${item.allowProgress ? ` · 진행 중 ${counts.progress}명` : ''}` : '제출 대상 없음'}${counts.excluded ? ` · 제출 제외 ${counts.excluded}명` : ''}</span></div>
@@ -185,7 +191,7 @@ function renderItems() {
   </form></section>
   <section class="panel"><h2>등록된 항목 ${state.data.items.length}개</h2><div class="table-wrap"><table>
     <thead><tr><th>항목명</th><th>방식</th><th>상태</th><th>관리</th></tr></thead><tbody>
-    ${orderedItems(state.data.items).map(i => `<tr><td><strong>${h(i.title)}</strong><div class="help">${i.dueDate ? h(i.dueDate) : '기한 없음'}</div></td>
+    ${orderedItems(state.data.items).map(i => `<tr><td><strong>${h(i.title)}</strong><div class="help">${i.dueDate ? h(formatDueDate(i.dueDate)) : '기한 없음'}</div></td>
       <td>${i.allowProgress ? '진행 중 허용' : '완료 체크'}${itemCounts(i.id).excluded ? `<div class="help">제출 제외 ${itemCounts(i.id).excluded}명</div>` : ''}</td><td>${i.archived ? '보관됨' : '사용 중'}</td>
       <td><div class="table-actions"><button class="btn small" data-action="edit-item" data-id="${h(i.id)}">수정</button>
       <button class="btn small" data-action="archive-item" data-id="${h(i.id)}">${i.archived ? '복원' : '보관'}</button>
