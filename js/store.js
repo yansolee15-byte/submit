@@ -1,4 +1,4 @@
-import { NONE, PROGRESS, DONE, submissionId, orderedStudents } from './model.js';
+import { NONE, PROGRESS, DONE, submissionId, orderedStudents, isExcluded } from './model.js?v08';
 import { firebaseConfig, teacherUid } from './config.js';
 import { checkFirebaseConfiguration } from './config-check.js';
 
@@ -29,6 +29,13 @@ const DEMO_KEY = 'classroom-submission-board-v1';
 const id = () => globalThis.crypto?.randomUUID?.().replaceAll('-', '').slice(0, 20) || `id${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
 const clone = value => JSON.parse(JSON.stringify(value));
 
+function checkEligible(data, itemId, entries) {
+  const item = data.items.find(item => item.id === itemId);
+  if (!item || entries.some(([studentId]) => isExcluded(item, studentId))) {
+    throw new Error('제출 대상이 아닌 학생의 상태는 변경할 수 없습니다.');
+  }
+}
+
 export async function createStore(onChange, onError) {
   const configStatus = checkFirebaseConfiguration(firebaseConfig, teacherUid);
   if (configStatus.mode === 'demo') return createDemoStore(onChange);
@@ -52,7 +59,9 @@ function createDemoStore(onChange) {
     async loginTeacher() { teacher = true; sync(); },
     async logoutTeacher() { teacher = false; sync(); },
     async saveSubmissions(itemId, changes) {
-      for (const [studentId, status] of Object.entries(changes)) {
+      const entries = Object.entries(changes);
+      checkEligible(data, itemId, entries);
+      for (const [studentId, status] of entries) {
         const sid = submissionId(itemId, studentId);
         data.submissions = data.submissions.filter(row => row.id !== sid);
         data.submissions.push({ id: sid, itemId, studentId, status });
@@ -257,6 +266,7 @@ async function createFirebaseStore(onChange, onError) {
     async saveSubmissions(itemId, changes, expected = null) {
       const entries = Object.entries(changes);
       if (entries.length === 0) return;
+      checkEligible(data, itemId, entries);
       if (entries.length > 400) throw new Error('한 번에 수정할 수 있는 기록은 400개까지입니다.');
       // 학생 팝업은 스냅샷을 받은 뒤 같은 학생의 기록이 외부에서 바뀌었는지도 검사한다.
       // 화면에 보이는 데이터만 검사하면 읽기와 쓰기 사이의 경쟁 상태가 생길 수 있다.

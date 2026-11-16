@@ -1,6 +1,6 @@
-import { createStore } from './store.js';
-import { NONE, PROGRESS, DONE, nextStatus, statusLabel, statusIcon,
-  getStatus, stats, escapeHTML as h, orderedStudents, orderedItems } from './model.js';
+import { createStore } from './store.js?v08';
+import { NONE, PROGRESS, DONE, EXCLUDED, nextStatus, statusLabel, statusIcon,
+  getStatus, stats, escapeHTML as h, orderedStudents, orderedItems, isExcluded, displayStatus } from './model.js?v08';
 
 const $app = document.getElementById('app');
 let store;
@@ -47,11 +47,13 @@ function showError(error) { toast(errorMessage(error), true); }
 function activeItems() { return orderedItems(state.data.items.filter(item => !item.archived)); }
 function students() { return orderedStudents(state.data.students); }
 function itemById(itemId) { return state.data.items.find(i => i.id === itemId); }
-function choiceClass(status) { return ` ${status === DONE ? 'done' : status === PROGRESS ? 'progress' : 'none'}`; }
+function choiceClass(status) { return ` ${[DONE, PROGRESS, EXCLUDED].includes(status) ? status : NONE}`; }
 function itemCounts(itemId) { return stats(state.data, itemId); }
+function eligibleStudents(item) { return students().filter(s => !isExcluded(item, s.id)); }
+function overviewItem(items = activeItems()) { return items.find(item => item.id === activeItemId) ?? items[0]; }
 function numberGrid(item) {
   return `<div class="number-grid">${students().map(s => {
-    const status = getStatus(state.data, item.id, s.id);
+    const status = displayStatus(state.data, item, s.id);
     return `<div class="number-tile${choiceClass(status)}" title="${h(s.number)}번: ${h(statusLabel(status))}" aria-label="${h(s.number)}번 ${h(statusLabel(status))}"><span>${h(s.number)}</span><span class="number-icon">${statusIcon(status)}</span></div>`;
   }).join('')}</div>`;
 }
@@ -80,22 +82,23 @@ function renderStudent() {
         <div class="card-head"><div><div class="item-name">${h(item.title)}</div><div class="item-meta">${item.dueDate ? `제출 기한: ${h(item.dueDate)}` : '제출 기한 없음'}</div></div>
         ${item.allowProgress ? '<span class="pill">진행 중 사용</span>' : ''}</div>
         ${numberGrid(item)}
-        <div class="card-foot"><span class="summary">완료 ${counts.done}/${students().length}명${item.allowProgress ? ` · 진행 중 ${counts.progress}명` : ''}</span></div>
+        <div class="card-foot"><span class="summary">${counts.eligible ? `완료 ${counts.done}/${counts.eligible}명${item.allowProgress ? ` · 진행 중 ${counts.progress}명` : ''}` : '제출 대상 없음'}${counts.excluded ? ` · 제출 제외 ${counts.excluded}명` : ''}</span></div>
       </button>`;
     }).join('')}</div>
-    <div class="legend"><span><i class="dot"></i>미완료</span><span><i class="dot progress"></i>진행 중</span><span><i class="dot done"></i>완료</span></div>
+    <div class="legend"><span><i class="dot"></i>미완료</span><span><i class="dot progress"></i>진행 중</span><span><i class="dot done"></i>완료</span>${items.some(i => itemCounts(i.id).excluded) ? '<span>× 제출 제외</span>' : ''}</div>
   </main>`;
 }
 function renderModal() {
   if (!modal) return '';
   const item = itemById(modal.itemId);
-  if (!item) { modal = null; return ''; }
+  if (!item || item.archived) { modal = null; return ''; }
   return `<div class="modal-backdrop" role="presentation"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-top"><div><h2 id="modal-title">${h(item.title)}</h2></div>
       <button class="btn small ghost" aria-label="닫기" data-action="close-modal">✕</button></div>
     <div class="modal-body"><div class="student-grid">${students().map(student => {
-      const status = modal.draft[student.id] ?? NONE;
-      return `<button class="student-choice${choiceClass(status)}" data-action="toggle-student" data-id="${h(student.id)}" aria-label="${h(student.number)}번 ${h(student.name)} ${h(statusLabel(status))}">
+      const excluded = isExcluded(item, student.id);
+      const status = excluded ? EXCLUDED : modal.draft[student.id] ?? NONE;
+      return `<button class="student-choice${choiceClass(status)}" ${excluded ? 'disabled' : `data-action="toggle-student" data-id="${h(student.id)}"`} aria-label="${h(student.number)}번 ${h(student.name)} ${h(statusLabel(status))}">
         <span class="student-n">${h(student.number)}번 ${h(student.name)}</span>
         <span class="choice-state">${statusIcon(status)} ${statusLabel(status)}</span></button>`;
     }).join('')}</div></div>
@@ -125,7 +128,7 @@ function renderTeacher() {
 }
 function renderOverview() {
   const allItems = activeItems();
-  const selectedItem = itemById(activeItemId) && !itemById(activeItemId).archived ? itemById(activeItemId) : allItems[0];
+  const selectedItem = overviewItem(allItems);
   const chosenStudent = state.data.students.find(s => s.id === activeStudentId) || students()[0];
   const pending = allItems.reduce((sum, item) => sum + itemCounts(item.id).progress, 0);
   const missing = allItems.reduce((sum, item) => sum + itemCounts(item.id).none, 0);
@@ -146,21 +149,25 @@ function renderOverview() {
       <div class="field"><label for="teacher-student-selector">학생 선택</label>
       <select id="teacher-student-selector" data-select="student"><option value="">학생 선택</option>${students().map(s => `<option value="${h(s.id)}" ${s.id === chosenStudent?.id ? 'selected' : ''}>${h(s.number)}번 ${h(s.name)}</option>`).join('')}</select></div>
       ${chosenStudent ? `<div class="table-wrap"><table><thead><tr><th>제출 항목</th><th>제출 상태</th><th>변경</th></tr></thead><tbody>${allItems.map(item => {
-        const status = getStatus(state.data, item.id, chosenStudent.id);
-        return `<tr><td>${h(item.title)}</td><td>${statusIcon(status)} ${statusLabel(status)}</td><td><button class="teacher-row-btn${choiceClass(status)}" data-action="teacher-status" data-item="${h(item.id)}" data-student="${h(chosenStudent.id)}">상태 변경 ↻</button></td></tr>`;
+        const status = displayStatus(state.data, item, chosenStudent.id);
+        return `<tr><td>${h(item.title)}</td><td>${statusIcon(status)} ${statusLabel(status)}</td><td>${teacherChangeButton(item, chosenStudent.id, status)}</td></tr>`;
       }).join('')}</tbody></table></div>` : '<p class="empty">등록된 학생이 없습니다.</p>'}
     `}</section>`;
 }
+function teacherChangeButton(item, studentId, status) {
+  return status === EXCLUDED ? '—' : `<button class="teacher-row-btn${choiceClass(status)}" data-action="teacher-status" data-item="${h(item.id)}" data-student="${h(studentId)}">상태 변경 ↻</button>`;
+}
 function renderTeacherItemTable(item) {
   const counts = itemCounts(item.id);
-  return `<div class="row space" style="margin:16px 0 10px"><p class="help">완료 ${counts.done}명 · 진행 중 ${counts.progress}명 · 미완료 ${counts.none}명</p>
-    <div class="row"><button class="btn small" data-action="bulk-done" ${!selectedForBulk.size ? 'disabled' : ''}>선택한 학생 완료</button><button class="btn small" data-action="bulk-none" ${!selectedForBulk.size ? 'disabled' : ''}>선택한 학생 미완료</button></div></div>
-    <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-select-all="yes" aria-label="학생 전체 선택" /></th><th>번호</th><th>이름</th><th>상태</th><th>교사 변경</th></tr></thead><tbody>
+  const chosen = eligibleStudents(item).filter(s => selectedForBulk.has(s.id)).length;
+  return `<div class="row space" style="margin:16px 0 10px"><p class="help">완료 ${counts.done}명 · 진행 중 ${counts.progress}명 · 미완료 ${counts.none}명${counts.excluded ? ` · 제출 제외 ${counts.excluded}명` : ''}</p>
+    <div class="row"><button class="btn small" data-action="bulk-done" ${!chosen ? 'disabled' : ''}>선택한 학생 완료</button><button class="btn small" data-action="bulk-none" ${!chosen ? 'disabled' : ''}>선택한 학생 미완료</button></div></div>
+    <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-select-all="yes" ${!counts.eligible ? 'disabled' : chosen === counts.eligible ? 'checked' : ''} aria-label="제출 대상 학생 전체 선택" /></th><th>번호</th><th>이름</th><th>상태</th><th>교사 변경</th></tr></thead><tbody>
     ${students().map(student => {
-      const status = getStatus(state.data, item.id, student.id);
-      return `<tr><td><input type="checkbox" data-select-student="${h(student.id)}" ${selectedForBulk.has(student.id) ? 'checked' : ''} aria-label="${h(student.number)}번 선택" /></td>
+      const status = displayStatus(state.data, item, student.id);
+      return `<tr${status === EXCLUDED ? ' class="excluded-row"' : ''}><td><input type="checkbox" data-select-student="${h(student.id)}" ${status === EXCLUDED ? 'disabled' : selectedForBulk.has(student.id) ? 'checked' : ''} aria-label="${h(student.number)}번 선택" /></td>
         <td>${h(student.number)}</td><td>${h(student.name)}</td><td>${statusIcon(status)} ${statusLabel(status)}</td>
-        <td><button class="teacher-row-btn${choiceClass(status)}" data-action="teacher-status" data-item="${h(item.id)}" data-student="${h(student.id)}">상태 변경 ↻</button></td></tr>`;
+        <td>${teacherChangeButton(item, student.id, status)}</td></tr>`;
     }).join('')}</tbody></table></div>`;
 }
 function renderItems() {
@@ -170,12 +177,16 @@ function renderItems() {
     <div class="field"><label for="item-title">제출 항목명 *</label><input id="item-title" name="title" maxlength="100" value="${h(item?.title ?? '')}" placeholder="예: 현장체험학습 신청서" required /></div>
     <div class="field"><label for="item-due">제출 기한 (선택)</label><input type="date" id="item-due" name="dueDate" value="${h(item?.dueDate ?? '')}" /></div>
     <label class="checkbox-line"><input type="checkbox" name="allowProgress" ${item?.allowProgress ? 'checked' : ''} /> 진행 중 허용 (미완료 → 진행 중 → 완료)</label>
+    <fieldset class="excluded-picker"><legend>제출 제외 학생 (선택)</legend>
+      <p class="help">제출하지 않아도 되는 학생의 번호를 눌러 ×로 표시해 주세요. 다시 누르면 제출 대상에 포함됩니다.</p>
+      ${students().length ? `<div class="excluded-grid">${students().map(s => `<label class="excluded-option" title="${h(s.name)}"><input type="checkbox" name="excludedStudentIds" value="${h(s.id)}" ${isExcluded(item, s.id) ? 'checked' : ''} aria-label="${h(s.number)}번 ${h(s.name)} 제출 제외" /><span>${h(s.number)}번 <b aria-hidden="true">×</b></span></label>`).join('')}</div>` : '<p class="help">등록된 학생이 없습니다. 학생을 등록한 뒤 선택할 수 있습니다.</p>'}
+    </fieldset>
     <div class="row"><button class="btn primary" type="submit" ${busy ? 'disabled' : ''}>${item ? '수정 저장' : '항목 추가'}</button>${item ? '<button type="button" class="btn" data-action="cancel-edit-item">수정 취소</button>' : ''}</div>
   </form></section>
   <section class="panel"><h2>등록된 항목 ${state.data.items.length}개</h2><div class="table-wrap"><table>
     <thead><tr><th>항목명</th><th>방식</th><th>상태</th><th>관리</th></tr></thead><tbody>
     ${orderedItems(state.data.items).map(i => `<tr><td><strong>${h(i.title)}</strong><div class="help">${i.dueDate ? h(i.dueDate) : '기한 없음'}</div></td>
-      <td>${i.allowProgress ? '진행 중 허용' : '완료 체크'}</td><td>${i.archived ? '보관됨' : '사용 중'}</td>
+      <td>${i.allowProgress ? '진행 중 허용' : '완료 체크'}${itemCounts(i.id).excluded ? `<div class="help">제출 제외 ${itemCounts(i.id).excluded}명</div>` : ''}</td><td>${i.archived ? '보관됨' : '사용 중'}</td>
       <td><div class="table-actions"><button class="btn small" data-action="edit-item" data-id="${h(i.id)}">수정</button>
       <button class="btn small" data-action="archive-item" data-id="${h(i.id)}">${i.archived ? '복원' : '보관'}</button>
       <button class="btn small danger" data-action="delete-item" data-id="${h(i.id)}">삭제</button></div></td></tr>`).join('')}
@@ -211,7 +222,7 @@ async function withBusy(operation, successMessage) {
   finally { busy = false; render(); }
 }
 function openModal(itemId) {
-  const item = itemById(itemId); if (!item) return;
+  const item = itemById(itemId); if (!item || item.archived) return;
   const initial = Object.fromEntries(students().map(s => [s.id, getStatus(state.data, itemId, s.id)]));
   modal = {itemId, initial, draft: {...initial}, touched: new Set()};
   render();
@@ -219,9 +230,11 @@ function openModal(itemId) {
 async function saveModal() {
   if (!modal) return;
   const draft = modal;
+  const item = itemById(draft.itemId);
+  if (!item || item.archived) { modal = null; render(); return; }
   const changes = {};
   for (const studentId of draft.touched) {
-    if (draft.draft[studentId] === draft.initial[studentId]) continue;
+    if (isExcluded(item, studentId) || !students().some(s => s.id === studentId) || draft.draft[studentId] === draft.initial[studentId]) continue;
     // 팝업이 열려 있는 동안 다른 태블릿이 같은 학생을 수정했다면 덮어쓰지 않는다.
     const latest = getStatus(state.data, draft.itemId, studentId);
     if (latest !== draft.initial[studentId]) {
@@ -262,6 +275,7 @@ async function handleClick(event) {
   if (action === 'close-modal') { modal = null; render(); }
   if (action === 'toggle-student' && modal) {
     const item = itemById(modal.itemId);
+    if (!item || item.archived || isExcluded(item, targetId)) return;
     modal.draft[targetId] = nextStatus(modal.draft[targetId], item.allowProgress);
     modal.touched.add(targetId); render();
   }
@@ -273,13 +287,15 @@ async function handleClick(event) {
   if (action === 'teacher-mode') { teacherMode = targetId; selectedForBulk.clear(); render(); }
   if (action === 'teacher-status') {
     const item = itemById(button.dataset.item), studentId = button.dataset.student;
+    if (!item || isExcluded(item, studentId)) return;
     await withBusy(() => store.saveSubmissions(item.id, {[studentId]: nextStatus(getStatus(state.data, item.id, studentId), item.allowProgress)}), '제출 상태를 수정했습니다.');
   }
   if (action === 'bulk-done' || action === 'bulk-none') {
-    const itemId = activeItemId && activeItems().some(i=>i.id===activeItemId) ? activeItemId : activeItems()[0]?.id;
-    if (!itemId || selectedForBulk.size===0) return;
-    const updates = Object.fromEntries([...selectedForBulk].map(id => [id, action === 'bulk-done' ? DONE : NONE]));
-    await withBusy(() => store.saveSubmissions(itemId, updates), '선택한 학생의 상태를 변경했습니다.');
+    const item = overviewItem();
+    if (!item || !selectedForBulk.size) return;
+    const updates = Object.fromEntries(eligibleStudents(item).filter(s => selectedForBulk.has(s.id)).map(s => [s.id, action === 'bulk-done' ? DONE : NONE]));
+    if (!Object.keys(updates).length) return;
+    await withBusy(() => store.saveSubmissions(item.id, updates), '선택한 학생의 상태를 변경했습니다.');
     selectedForBulk.clear(); render();
   }
   if (action === 'edit-item') { editingItemId = targetId; render(); window.scrollTo({top:0,behavior:'smooth'}); }
@@ -340,13 +356,15 @@ async function handleSubmit(event) {
     const dueDate = String(values.get('dueDate') || '');
     const allowProgress = values.get('allowProgress') === 'on';
     if (!title) return showError('제출 항목명을 입력해 주세요.');
+    const studentIds = new Set(students().map(s => s.id));
+    const excludedStudentIds = [...new Set(values.getAll('excludedStudentIds'))].filter(id => studentIds.has(id));
     const oldItem = itemById(editingItemId);
     if (oldItem?.allowProgress && !allowProgress && state.data.submissions.some(s => s.itemId === oldItem.id && s.status === PROGRESS)) {
       if (!confirm('진행 중 허용을 끄면 기존 진행 중 상태가 모두 미완료로 변경됩니다. 계속하시겠습니까?')) return;
     }
     await withBusy(async () => {
-      if (editingItemId) await store.updateItem(editingItemId, {title,dueDate,allowProgress});
-      else await store.addItem({title,dueDate,allowProgress});
+      if (editingItemId) await store.updateItem(editingItemId, {title,dueDate,allowProgress,excludedStudentIds});
+      else await store.addItem({title,dueDate,allowProgress,excludedStudentIds});
       editingItemId = null;
     }, '제출 항목을 저장했습니다.');
   }
@@ -357,11 +375,12 @@ function handleChange(event) {
   if (select === 'student') { activeStudentId = event.target.value; render(); }
   if (event.target.hasAttribute('data-select-student')) {
     const id = event.target.dataset.selectStudent;
+    if (isExcluded(overviewItem(), id)) return;
     if (event.target.checked) selectedForBulk.add(id); else selectedForBulk.delete(id);
     render();
   }
   if (event.target.hasAttribute('data-select-all')) {
-    selectedForBulk = event.target.checked ? new Set(students().map(s => s.id)) : new Set();
+    selectedForBulk = event.target.checked ? new Set(eligibleStudents(overviewItem()).map(s => s.id)) : new Set();
     render();
   }
 }
@@ -373,6 +392,30 @@ document.addEventListener('keydown', event => {
 });
 try {
   store = await createStore(({data,teacher}) => {
+    const itemForm = view === 'teacher' && teacher && teacherTab === 'items' && !busy
+      ? $app.querySelector('[data-form="item"]') : null;
+    if (itemForm) {
+      const currentDraft = new FormData(itemForm);
+      const wasFocused = document.activeElement;
+      const focusedName = itemForm.contains(wasFocused) ? wasFocused.name : null;
+      const focusedValue = itemForm.contains(wasFocused) ? wasFocused.value : null;
+      state = {data,teacher};
+      render();
+      const nextForm = $app.querySelector('[data-form="item"]');
+      if (!nextForm) return;
+      const oldIds = new Set([...itemForm.elements].filter(el => el.name === 'excludedStudentIds').map(el => el.value));
+      const checkedIds = new Set(currentDraft.getAll('excludedStudentIds'));
+      for (const field of nextForm.elements) {
+        if (field.name === 'excludedStudentIds' && oldIds.has(field.value)) field.checked = checkedIds.has(field.value);
+        if (field.name === 'title' || field.name === 'dueDate') field.value = currentDraft.get(field.name);
+        if (field.name === 'allowProgress') field.checked = currentDraft.has('allowProgress');
+        if (focusedName && field.name === focusedName && (focusedName !== 'excludedStudentIds' || field.value === focusedValue)) {
+          field.focus({preventScroll: true});
+          if (field.name === 'title') field.setSelectionRange(wasFocused.selectionStart, wasFocused.selectionEnd);
+        }
+      }
+      return;
+    }
     state = {data,teacher};
     if (!teacher && view==='teacher') view='student';
     render();
