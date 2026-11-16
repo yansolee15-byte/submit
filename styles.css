@@ -19,3 +19,18 @@ button.btn{border:1px solid #d9e1ec;background:white;border-radius:10px;min-heig
 .teacher-row-btn{border:1px solid #d5e0eb;background:white;border-radius:8px;padding:5px 8px;font-weight:750;white-space:nowrap}.teacher-row-btn.done{background:#e5f6ed;color:#176943}.teacher-row-btn.progress{background:#fff1ce;color:#8e5b10}.teacher-row-btn.none{background:#f2f5f8;color:#576a80}
 .empty{padding:48px 20px;text-align:center;color:#6e7d90}.toast{position:fixed;z-index:50;bottom:24px;left:50%;transform:translateX(-50%);border-radius:11px;background:#203248;color:white;padding:12px 20px;max-width:min(90vw,560px);box-shadow:0 12px 30px #17294436}.toast.error{background:#a12f36}.loading-screen{padding:65px;text-align:center;color:#64748b}
 @media(max-width:640px){.container{padding:18px 12px 70px}.header-content{padding:13px}.brand{font-size:1rem}.cards{grid-template-columns:1fr}.click-card,.panel{padding:16px}.number-grid{gap:5px}.number-tile{min-height:40px}.student-grid{grid-template-columns:1fr}.modal-body{padding:14px}.modal-top,.modal-bottom{padding:14px}.stat-row{grid-template-columns:repeat(3,minmax(0,1fr))}.stat-box{padding:10px}.stat-box .big{font-size:1.25rem}.form-grid{grid-template-columns:1fr}.lead{align-items:start}}
+.number-tile.excluded,.student-choice.excluded,.excluded-row{background:#e5e7eb;color:#475569}
+.number-tile.excluded{border-color:#cbd5e1}
+.student-choice.excluded:disabled{border-color:#cbd5e1;opacity:1;cursor:not-allowed}
+.student-choice.excluded .choice-state{color:#475569}
+.excluded-picker{grid-column:1/-1;min-width:0;margin:2px 0;padding:12px 14px 14px;border:1px solid #dbe3ed;border-radius:12px}
+.excluded-picker legend{padding:0 6px;font-weight:750;font-size:.9rem}
+.excluded-picker .help{margin:0 0 10px}
+.excluded-grid{display:flex;flex-wrap:wrap;gap:8px}
+.excluded-option{position:relative;cursor:pointer}
+.excluded-option input{position:absolute;width:1px;height:1px;opacity:0}
+.excluded-option span{display:flex;align-items:center;justify-content:center;gap:5px;min-width:56px;min-height:44px;padding:6px 8px;border:1px solid #cfd9e4;border-radius:8px;background:white;color:#24374c;font-size:.9rem;font-weight:700}
+.excluded-option span b{visibility:hidden}
+.excluded-option input:checked + span{background:#e5e7eb;color:#334155;border-color:#64748b}
+.excluded-option input:checked + span b{visibility:visible}
+.excluded-option input:focus-visible + span{outline:2px solid #316daf;outline-offset:2px}
